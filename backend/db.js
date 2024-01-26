@@ -1,36 +1,41 @@
-const mariadb = require("mariadb");
+const { MongoClient } = require("mongodb");
 
-const pool = mariadb.createPool({
-  host: "localhost",
-  user: "aein",
-  password: "aein",
-  database: "bankdb",
-  port: 3306,
-});
+const uri = "mongodb://localhost:27017"; 
+const client = new MongoClient(uri, { useUnifiedTopology: true, useNewUrlParser: true });
+
+async function connectToMongoDB() {
+  try {
+    await client.connect();
+    console.log("Connected to MongoDB");
+  } catch (err) {
+    console.error(`Error connecting to MongoDB: ${err}`);
+    throw err;
+  }
+}
+
+async function closeMongoDBConnection() {
+  await client.close();
+  console.log("Closed MongoDB connection");
+}
 
 async function executeQuery(query, values = []) {
-  let conn;
+  const db = client.db("bankdb"); 
+  const collection = db.collection("account");
+
   try {
-    conn = await pool.getConnection();
-    const result = await conn.query(query, values);
+    const result = await collection[query](...values);
     return result;
   } catch (err) {
     console.log(`\n ❌ Error in Database Query: ${err}`);
     throw err;
-  } finally {
-    if (conn) conn.release();
   }
 }
 
-const createNewAccount = async (
-  { acId, acNm, balance },
-  onCreate = undefined
-) => {
+const createNewAccount = async ({ acId, acNm, balance }, onCreate = undefined) => {
   try {
-    await executeQuery(
-      "INSERT INTO account (ac_id, ac_nm, balance) VALUES (?, ?, ?)",
-      [acId, acNm, balance]
-    );
+    const result = await executeQuery("insertOne", [
+      { ac_id: acId, ac_nm: acNm, balance: balance },
+    ]);
     console.log(`\n ✅ New Customer Created Successfully`);
     if (onCreate) onCreate(`✅ New Customer Created Successfully`);
   } catch (err) {
@@ -40,17 +45,17 @@ const createNewAccount = async (
 
 const withdraw = async ({ acId, amount }, onWithdraw = undefined) => {
   try {
-    const result = await executeQuery(
-      "SELECT balance FROM account WHERE ac_id = ?",
-      [acId]
-    );
-    const balance = parseFloat(result[0].balance);
+    const result = await executeQuery("findOne", [
+      { ac_id: acId },
+      { projection: { balance: 1 } },
+    ]);
 
+    const balance = parseFloat(result.balance);
     const newBalance = balance - parseFloat(amount);
 
-    await executeQuery("UPDATE account SET balance = ? WHERE ac_id = ?", [
-      newBalance,
-      acId,
+    await executeQuery("updateOne", [
+      { ac_id: acId },
+      { $set: { balance: newBalance } },
     ]);
 
     console.log(`\n ✅ Amount ${amount} Withdrawal Successfully`);
@@ -59,20 +64,22 @@ const withdraw = async ({ acId, amount }, onWithdraw = undefined) => {
     console.log(`\n ❌ Problem In Withdrawing`);
   }
 };
-
 const deposit = async ({ acId, amount }, onDeposit = undefined) => {
   try {
-    const result = await executeQuery(
-      "SELECT balance FROM account WHERE ac_id = ?",
-      [acId]
-    );
-    const balance = parseFloat(result[0].balance);
+    const db = client.db("bankdb"); // Replace "bankdb" with your MongoDB database name
+    const collection = db.collection("account");
+
+    // Find the account by ID
+    const result = await collection.findOne({ _id: ObjectID(acId) });
+
+    // Update the balance
+    const balance = parseFloat(result.balance);
     const newBalance = balance + parseFloat(amount);
 
-    await executeQuery("UPDATE account SET balance = ? WHERE ac_id = ?", [
-      newBalance,
-      acId,
-    ]);
+    await collection.updateOne(
+      { _id: ObjectID(acId) },
+      { $set: { balance: newBalance } }
+    );
 
     console.log(`\n ✅ Amount ${amount} Deposited Successfully`);
     if (onDeposit) onDeposit(`✅ Amount ${amount} Deposited Successfully`);
@@ -91,11 +98,14 @@ const transfer = async ({ srcId, destId, amount }, onTransfer = undefined) => {
 const balance = async (acId, onBalance = undefined) => {
   console.log(acId);
   try {
-    const result = await executeQuery(
-      "SELECT balance FROM account WHERE ac_id = ?",
-      [acId]
-    );
-    const balance = parseFloat(result[0].balance);
+    const db = client.db("bankdb"); // Replace "bankdb" with your MongoDB database name
+    const collection = db.collection("account");
+
+    // Find the account by ID
+    const result = await collection.findOne({ _id: ObjectID(acId) });
+
+    // Get and display the balance
+    const balance = parseFloat(result.balance);
     console.log(`\n 💰 Your Account Balance Is : ${balance}`);
     if (onBalance) onBalance(balance);
   } catch (err) {
@@ -104,7 +114,10 @@ const balance = async (acId, onBalance = undefined) => {
   }
 };
 
+
 module.exports = {
+  connectToMongoDB,
+  closeMongoDBConnection,
   createNewAccount,
   deposit,
   withdraw,
